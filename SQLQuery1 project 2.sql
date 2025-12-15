@@ -12,11 +12,11 @@ CREATE TABLE users (
     created_at DATETIME DEFAULT GETDATE()
 );
 
--- HABITS TABLE (matches your PYTHON CODE)
+-- HABITS TABLE 
 CREATE TABLE habits (
     habit_id INT PRIMARY KEY IDENTITY(1,1),
     user_id INT NOT NULL,
-    title VARCHAR(255) NOT NULL,
+    habit_name VARCHAR(255) NOT NULL,
     description VARCHAR(500),
     frequency VARCHAR(50),
     created_at DATE NOT NULL DEFAULT CAST(GETDATE() AS DATE),
@@ -45,8 +45,30 @@ CREATE TABLE mood_entries (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
+USE HabitMate2;
+GO
+
+-- Delete energy_level column
+ALTER TABLE mood_entries DROP COLUMN energy_level;
+GO
+
+-- Delete positivity_level column
+ALTER TABLE mood_entries DROP COLUMN positivity_level;
+GO
+
+-- Verify columns are removed
+SELECT COLUMN_NAME, DATA_TYPE 
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'mood_entries'
+ORDER BY ORDINAL_POSITION;
+GO
 
 SELECT * FROM users;
 SELECT * FROM habits;
 SELECT * FROM habit_logs;
 SELECT * FROM mood_entries;
+
+SELECT COLUMN_NAME, DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'habits';
+
