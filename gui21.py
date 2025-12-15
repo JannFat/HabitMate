@@ -32,6 +32,35 @@ class HabitMateApp:
         self.sidebar_logo = None
 
         self.build_login_screen()
+    def load_user_logs(self):
+        """
+        Loads completion logs from DB and fills self.completed.
+        Maps: 'YYYY-MM-DD' -> [habitIndex]
+        """
+        self.completed = {}
+        if not hasattr(self, "user_id"):
+            return
+
+        logs = db.get_habit_logs(self.user_id)
+
+        # Create habit_id -> habit_index mapping
+        habit_index_map = {}
+        for index, h in enumerate(self.habits):
+            if "id" in h:
+                habit_index_map[h["id"]] = index
+
+        # Populate self.completed
+        for habit_id, log_date in logs:
+            log_date = log_date.isoformat()
+
+            if habit_id not in habit_index_map:
+                continue  # skip if habit not loaded or deleted
+
+        index = habit_index_map[habit_id]
+        self.completed.setdefault(log_date, [])
+
+        if index not in self.completed[log_date]:
+            self.completed[log_date].append(index)
 
     def build_login_screen(self):
         for w in self.root.winfo_children(): 
@@ -92,7 +121,7 @@ class HabitMateApp:
                                     bd=0, relief="flat", highlightthickness=2,
                                     highlightbackground="#ddd", highlightcolor="#C89047")
         self.login_username.pack(fill="x", pady=(8, 0), ipady=8)
-        # self.login_username.insert(0, "admin")
+        self.login_username.insert(0, "admin")
         self.login_username.focus()
         
         # Password with eye icon
@@ -110,7 +139,7 @@ class HabitMateApp:
                                     highlightthickness=2, highlightbackground="#ddd", 
                                     highlightcolor="#C89047")
         self.login_password.pack(side="left", fill="x", expand=True, ipady=8)
-        # self.login_password.insert(0, "123")
+        self.login_password.insert(0, "123")
         
         eye_btn = tk.Button(pwd_entry_frame, text="👁", font=("Segoe UI", 12), 
                         bg="white", fg="#666", bd=0, cursor="hand2",
@@ -279,28 +308,15 @@ class HabitMateApp:
 
         try:
             rows = db.get_habits(self.user_id)  # rows: list of tuples
-            # Actual row columns: (habit_id, habit_name, description, created_at)
+            # Expected row columns: (habit_id, title, description, frequency, created_at)
             for row in rows:
                 habit_id = row[0]
-                title = row[1]  # habit_name column
-                description = row[2] or "" if len(row) > 2 else ""
-                
-                # Extract frequency from description if it was stored there
-                # Format: "description | Frequency: 0,1,2" or just "Frequency: 0,1,2"
-                frequency = ""
-                clean_description = description
-                if description and "Frequency:" in description:
-                    # Split on "Frequency:" to extract it
-                    parts = description.split("Frequency:")
-                    if len(parts) > 1:
-                        # Get the part before "Frequency:" as clean description
-                        clean_description = parts[0].strip().rstrip("|").strip()
-                        # Get the frequency part (everything after "Frequency:")
-                        frequency_part = parts[1].strip()
-                        frequency = frequency_part
-                
+                title = row[1]
+                description = row[2] or ""
+                frequency = row[3] or ""  # adapt depending on how you store frequency/repeat_days
                 # IMPORTANT: gui expects "repeat_days" as list of weekday indices.
-                # The DB stores frequency as CSV of day indices ("0,1,2") - parse that here.
+                # If your DB stores frequency as CSV of day indices ("0,1,2") parse that here.
+                # For example, if frequency column stores "0,2,4":
                 repeat_days = []
                 if frequency:
                     # Try parsing CSV of ints
@@ -313,30 +329,16 @@ class HabitMateApp:
                     "id": habit_id,
                     "name": title,
                     "category": "Personal",   # adjust if you stored category in DB
-                    "description": clean_description,  # Use cleaned description without frequency
+                    "description": description,
                     "repeat_days": repeat_days
                 }
                 self.habits.append(habit_dict)
-
-            # Load completion logs from habit_logs table and fill self.completed
-            log_rows = db.get_habit_logs(self.user_id)  # Returns (habit_id, log_date) tuples
-            # Create a mapping from habit_id to habit index
-            habit_id_to_index = {h["id"]: idx for idx, h in enumerate(self.habits)}
             
-            for habit_id, log_date in log_rows:
-                # Convert log_date to ISO format string
-                if isinstance(log_date, date):
-                    day_str = log_date.isoformat()
-                else:
-                    day_str = str(log_date)
-                
-                # Find the habit index for this habit_id
-                habit_index = habit_id_to_index.get(habit_id)
-                if habit_index is not None:
-                    if day_str not in self.completed:
-                        self.completed[day_str] = []
-                    if habit_index not in self.completed[day_str]:
-                        self.completed[day_str].append(habit_index)
+            self.load_user_logs()
+
+            # (Optional) load completion logs from habit_logs table and fill self.completed
+            # You can implement db.get_habit_logs(user_id) that returns (habit_id, log_date)
+            # and then transform into self.completed[date_iso] = [list of habit indices]
         except Exception as e:
             print("Error loading user data:", e)
 
@@ -647,29 +649,22 @@ class HabitMateApp:
                     command=lambda idx=i: self.toggle_day(idx, day_str, popup)).pack(side="right")
 
     def toggle_day(self, idx, day_str, popup):
-        self.completed.setdefault(day_str, [])
-        habit_id = self.habits[idx]["id"]
-        log_date = date.fromisoformat(day_str) if isinstance(day_str, str) else day_str
-        
-        if idx in self.completed[day_str]:
-            # Remove from completed
-            self.completed[day_str].remove(idx)
-            # Delete from database
-            try:
-                db.delete_habit_log(self.user_id, habit_id, log_date)
-            except Exception as e:
-                print(f"Error deleting habit log: {e}")
+        habit_id = self.habits[idx].get("id")
+
+        # If marking as done
+        if idx not in self.completed.get(day_str, []):
+            db.add_habit_log(self.user_id, habit_id, "done")
+            self.completed.setdefault(day_str, []).append(idx)
         else:
-            # Add to completed
-            self.completed[day_str].append(idx)
-            # Save to database
-            try:
-                db.add_habit_log(self.user_id, habit_id, log_date, "completed")
-            except Exception as e:
-                print(f"Error adding habit log: {e}")
-        
+            # Optional: Remove log from DB (if you want delete function)
+            # db.delete_habit_log(self.user_id, habit_id, day_str)
+            self.completed[day_str].remove(idx)
+
+        if not self.completed[day_str]:
+            del self.completed[day_str]
+
         popup.destroy()
-        self.show_calendar()  # Refresh calendar to update dots
+        self.show_calendar()
 
     def show_add_habit(self):
         self.clear_content()
@@ -857,50 +852,21 @@ class HabitMateApp:
             messagebox.showerror("Error", "Select at least one day!")
             return
 
-        # Convert days list to comma-separated string for database
-        frequency = ",".join(str(d) for d in days)
+        habit_data = {
+            "name": name,
+            "category": self.cat_var.get(),
+            "description": description,
+            "repeat_days": days
+        }
         
         if self.editing_index is not None:
-            # Update existing habit in database
-            habit_id = self.habits[self.editing_index]["id"]
-            try:
-                db.update_habit(habit_id, name, description, frequency)
-                # Update in-memory habit
-                habit_data = {
-                    "id": habit_id,
-                    "name": name,
-                    "category": self.cat_var.get(),
-                    "description": description,
-                    "repeat_days": days
-                }
-                self.habits[self.editing_index] = habit_data
-                messagebox.showinfo("Success!", f"Updated: {self.cat_var.get()} - {name}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to update habit in database: {e}")
-                return
+            # Update existing habit
+            self.habits[self.editing_index] = habit_data
+            messagebox.showinfo("Success!", f"Updated: {self.cat_var.get()} - {name}")
         else:
-            # Add new habit to database
-            try:
-                habit_id = db.add_habit(self.user_id, name, description, frequency)
-                # Add to in-memory habits list
-                habit_data = {
-                    "id": habit_id,
-                    "name": name,
-                    "category": self.cat_var.get(),
-                    "description": description,
-                    "repeat_days": days
-                }
-                self.habits.append(habit_data)
-                messagebox.showinfo("Success!", f"Added: {self.cat_var.get()} - {name}")
-                
-                # Verify data was saved (print to console)
-                print("\n[VERIFICATION] Checking database after adding habit...")
-                db.verify_all_data()
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save habit to database: {e}")
-                import traceback
-                traceback.print_exc()
-                return
+            # Add new habit
+            self.habits.append(habit_data)
+            messagebox.showinfo("Success!", f"Added: {self.cat_var.get()} - {name}")
         
         # Clear the form fields
         self.name_entry.delete(0, tk.END)
@@ -1009,18 +975,10 @@ class HabitMateApp:
         """Delete the selected habit after confirmation"""
         if 0 <= index < len(self.habits):
             habit_name = self.habits[index]["name"]
-            habit_id = self.habits[index]["id"]
             if messagebox.askyesno("Delete Habit", 
                                 f"Are you sure you want to delete '{habit_name}'?\n\nThis will also remove all completion records for this habit."):
                 
-                # Delete from database (this will also delete related habit_logs due to foreign key cascade or explicit delete)
-                try:
-                    db.delete_habit(habit_id)
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to delete habit from database: {e}")
-                    return
-                
-                # Remove all completion records for this habit from memory
+                # Remove all completion records for this habit
                 for day_str in list(self.completed.keys()):
                     if index in self.completed[day_str]:
                         self.completed[day_str].remove(index)
@@ -1037,7 +995,7 @@ class HabitMateApp:
                         if i != index
                     ]
                 
-                # Delete the habit from memory
+                # Delete the habit
                 del self.habits[index]
                 
                 messagebox.showinfo("Success!", f"Deleted habit: {habit_name}")
@@ -1064,12 +1022,6 @@ class HabitMateApp:
     def set_mood(self, mood, popup):
         popup.destroy()
         self.mood_label.config(text=f"Today's Mood: {mood}", fg="#212121")
-        
-        # Save mood to database
-        try:
-            db.add_mood_entry(self.user_id, mood)
-        except Exception as e:
-            print(f"Error saving mood to database: {e}")
 
     def clear_content(self):
         for w in self.content.winfo_children():
